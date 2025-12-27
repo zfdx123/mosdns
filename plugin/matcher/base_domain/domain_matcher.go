@@ -22,12 +22,13 @@ package base_domain
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/IrineSistiana/mosdns/v5/pkg/matcher/domain"
 	"github.com/IrineSistiana/mosdns/v5/pkg/query_context"
 	"github.com/IrineSistiana/mosdns/v5/plugin/data_provider"
 	"github.com/IrineSistiana/mosdns/v5/plugin/data_provider/domain_set"
 	"github.com/IrineSistiana/mosdns/v5/plugin/executable/sequence"
-	"strings"
 )
 
 var _ sequence.Matcher = (*Matcher)(nil)
@@ -42,7 +43,7 @@ type MatchFunc func(qCtx *query_context.Context, m domain.Matcher[struct{}]) (bo
 
 type Matcher struct {
 	match MatchFunc
-	mg    []domain.Matcher[struct{}]  // 预构建的matcher列表
+	mg    []domain.Matcher[struct{}] // 预构建的matcher列表
 }
 
 func (m *Matcher) Match(_ context.Context, qCtx *query_context.Context) (bool, error) {
@@ -64,7 +65,6 @@ func NewMatcher(bq sequence.BQ, args *Args, f MatchFunc) (m *Matcher, err error)
 		}
 		dm := dsProvider.GetDomainMatcher()
 		m.mg = append(m.mg, dm)
-		fmt.Printf("[domain_matcher] 获取并保存matcher: %s\n", tag)
 	}
 
 	// Anonymous set from plugin's args and files.

@@ -21,6 +21,7 @@ package domain_set
 
 import (
 	"sync/atomic"
+
 	"github.com/IrineSistiana/mosdns/v5/pkg/matcher/domain"
 )
 
@@ -37,7 +38,7 @@ func (mg MatcherGroup) Match(s string) (struct{}, bool) {
 
 // DynamicMatcherGroup 动态matcher组，支持热重载
 type DynamicMatcherGroup struct {
-	matchers *atomic.Value  // 存储MatcherGroup
+	matchers *atomic.Value // 存储MatcherGroup
 }
 
 func NewDynamicMatcherGroup() *DynamicMatcherGroup {

@@ -22,12 +22,17 @@ package ip_set
 import (
 	"bytes"
 	"fmt"
-	"github.com/IrineSistiana/mosdns/v5/coremain"
-	"github.com/IrineSistiana/mosdns/v5/pkg/matcher/netlist"
-	"github.com/IrineSistiana/mosdns/v5/plugin/data_provider"
 	"net/netip"
 	"os"
 	"strings"
+	"time"
+
+	"github.com/IrineSistiana/mosdns/v5/coremain"
+	"github.com/IrineSistiana/mosdns/v5/mlog"
+	"github.com/IrineSistiana/mosdns/v5/pkg/matcher/netlist"
+	"github.com/IrineSistiana/mosdns/v5/plugin/data_provider"
+	"github.com/fsnotify/fsnotify"
+	"go.uber.org/zap"
 )
 
 const PluginType = "ip_set"
@@ -41,40 +46,131 @@ func Init(bp *coremain.BP, args any) (any, error) {
 }
 
 type Args struct {
-	IPs   []string `yaml:"ips"`
-	Sets  []string `yaml:"sets"`
-	Files []string `yaml:"files"`
+	IPs        []string `yaml:"ips"`
+	Sets       []string `yaml:"sets"`
+	Files      []string `yaml:"files"`
+	AutoReload bool     `yaml:"auto_reload"`
 }
 
 var _ data_provider.IPMatcherProvider = (*IPSet)(nil)
 
 type IPSet struct {
-	mg []netlist.Matcher
+	bp      *coremain.BP
+	args    *Args
+	dynamic *DynamicMatcherGroup
+
+	watcher *fsnotify.Watcher
+	files   []string
 }
 
 func (d *IPSet) GetIPMatcher() netlist.Matcher {
-	return MatcherGroup(d.mg)
+	return d.dynamic
 }
 
 func NewIPSet(bp *coremain.BP, args *Args) (*IPSet, error) {
-	p := &IPSet{}
+	d := &IPSet{
+		bp:      bp,
+		args:    args,
+		dynamic: NewDynamicMatcherGroup(),
+		files:   args.Files,
+	}
 
-	l := netlist.NewList()
-	if err := LoadFromIPsAndFiles(args.IPs, args.Files, l); err != nil {
+	if err := d.rebuildMatcher(); err != nil {
 		return nil, err
+	}
+
+	if args.AutoReload && len(args.Files) > 0 {
+		if err := d.startWatcher(); err != nil {
+			return nil, err
+		}
+	}
+
+	return d, nil
+}
+
+func (d *IPSet) rebuildMatcher() error {
+	var matchers []netlist.Matcher
+
+	// IPs + Files
+	l := netlist.NewList()
+	if err := LoadFromIPsAndFiles(d.args.IPs, d.args.Files, l); err != nil {
+		return err
 	}
 	l.Sort()
 	if l.Len() > 0 {
-		p.mg = append(p.mg, l)
+		matchers = append(matchers, l)
 	}
-	for _, tag := range args.Sets {
-		provider, _ := bp.M().GetPlugin(tag).(data_provider.IPMatcherProvider)
-		if provider == nil {
-			return nil, fmt.Errorf("%s is not an IPMatcherProvider", tag)
+
+	// 引用其他 ip_set
+	for _, tag := range d.args.Sets {
+		p, _ := d.bp.M().GetPlugin(tag).(data_provider.IPMatcherProvider)
+		if p == nil {
+			return fmt.Errorf("%s is not IPMatcherProvider", tag)
 		}
-		p.mg = append(p.mg, provider.GetIPMatcher())
+		matchers = append(matchers, p.GetIPMatcher())
 	}
-	return p, nil
+
+	d.dynamic.Update(MatcherGroup(matchers))
+	return nil
+}
+
+func (d *IPSet) startWatcher() error {
+	w, err := fsnotify.NewWatcher()
+	if err != nil {
+		return err
+	}
+	d.watcher = w
+
+	for _, f := range d.files {
+		if err := w.Add(f); err != nil {
+			return err
+		}
+	}
+
+	go d.watchLoop()
+	return nil
+}
+
+func (d *IPSet) watchLoop() {
+	lastReload := time.Now()
+
+	for {
+		select {
+		case ev, ok := <-d.watcher.Events:
+			if !ok {
+				return
+			}
+			if ev.Op&(fsnotify.Write|fsnotify.Create) == 0 {
+				continue
+			}
+
+			if time.Since(lastReload) < 500*time.Millisecond {
+				continue
+			}
+			lastReload = time.Now()
+
+			go func() {
+				if err := d.rebuildMatcher(); err != nil {
+					mlog.L().Info("[ip_set] reload failed: ", zap.Error(err))
+				} else {
+					mlog.L().Info("[ip_set] reload success")
+				}
+			}()
+
+		case err, ok := <-d.watcher.Errors:
+			if !ok {
+				return
+			}
+			mlog.L().Info("[ip_set] watcher error", zap.Error(err))
+		}
+	}
+}
+
+func (d *IPSet) Close() error {
+	if d.watcher != nil {
+		return d.watcher.Close()
+	}
+	return nil
 }
 
 func parseNetipPrefix(s string) (netip.Prefix, error) {
@@ -119,25 +215,12 @@ func LoadFromFiles(fs []string, l *netlist.List) error {
 }
 
 func LoadFromFile(f string, l *netlist.List) error {
-	if len(f) > 0 {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			return err
-		}
-		if err := netlist.LoadFromReader(l, bytes.NewReader(b)); err != nil {
-			return err
-		}
+	if len(f) == 0 {
+		return nil
 	}
-	return nil
-}
-
-type MatcherGroup []netlist.Matcher
-
-func (mg MatcherGroup) Match(addr netip.Addr) bool {
-	for _, m := range mg {
-		if m.Match(addr) {
-			return true
-		}
+	b, err := os.ReadFile(f)
+	if err != nil {
+		return err
 	}
-	return false
+	return netlist.LoadFromReader(l, bytes.NewReader(b))
 }

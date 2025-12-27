@@ -22,11 +22,12 @@ package hosts
 import (
 	"errors"
 	"fmt"
+	"net/netip"
+	"strings"
+
 	"github.com/IrineSistiana/mosdns/v5/pkg/dnsutils"
 	"github.com/IrineSistiana/mosdns/v5/pkg/matcher/domain"
 	"github.com/miekg/dns"
-	"net/netip"
-	"strings"
 )
 
 type Hosts struct {

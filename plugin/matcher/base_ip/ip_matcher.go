@@ -22,12 +22,13 @@ package base_ip
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/IrineSistiana/mosdns/v5/pkg/matcher/netlist"
 	"github.com/IrineSistiana/mosdns/v5/pkg/query_context"
 	"github.com/IrineSistiana/mosdns/v5/plugin/data_provider"
 	"github.com/IrineSistiana/mosdns/v5/plugin/data_provider/ip_set"
 	"github.com/IrineSistiana/mosdns/v5/plugin/executable/sequence"
-	"strings"
 )
 
 var _ sequence.Matcher = (*Matcher)(nil)
@@ -43,11 +44,14 @@ type MatchFunc func(qCtx *query_context.Context, m netlist.Matcher) (bool, error
 type Matcher struct {
 	match MatchFunc
 
-	mg []netlist.Matcher
+	// 注意：这里存的是“活的 matcher”
+	// 可能是 DynamicMatcherGroup，也可能是 netlist.List
+	matchers []netlist.Matcher
 }
 
 func (m *Matcher) Match(_ context.Context, qCtx *query_context.Context) (matched bool, err error) {
-	return m.match(qCtx, ip_set.MatcherGroup(m.mg))
+	// 每次 Match 都使用当前 matcher 状态
+	return m.match(qCtx, ip_set.MatcherGroup(m.matchers))
 }
 
 func NewMatcher(bq sequence.BQ, args *Args, f MatchFunc) (m *Matcher, err error) {
@@ -55,26 +59,27 @@ func NewMatcher(bq sequence.BQ, args *Args, f MatchFunc) (m *Matcher, err error)
 		match: f,
 	}
 
-	// Acquire lists from other plugins or files.
+	// 引用其他 ip_set（热的）
 	for _, tag := range args.IPSets {
 		p := bq.M().GetPlugin(tag)
 		provider, _ := p.(data_provider.IPMatcherProvider)
 		if provider == nil {
 			return nil, fmt.Errorf("cannot find ipset %s", tag)
 		}
-		l := provider.GetIPMatcher()
-		m.mg = append(m.mg, l)
+
+		// 这里拿到的是 DynamicMatcherGroup
+		m.matchers = append(m.matchers, provider.GetIPMatcher())
 	}
 
-	// Anonymous set from plugin's args and files.
+	// 匿名 IP / file（静态）
 	if len(args.IPs)+len(args.Files) > 0 {
-		anonymousList := netlist.NewList()
-		if err := ip_set.LoadFromIPsAndFiles(args.IPs, args.Files, anonymousList); err != nil {
+		l := netlist.NewList()
+		if err := ip_set.LoadFromIPsAndFiles(args.IPs, args.Files, l); err != nil {
 			return nil, err
 		}
-		anonymousList.Sort()
-		if anonymousList.Len() > 0 {
-			m.mg = append(m.mg, anonymousList)
+		l.Sort()
+		if l.Len() > 0 {
+			m.matchers = append(m.matchers, l)
 		}
 	}
 
