@@ -13,12 +13,18 @@ docker 镜像: [docker hub](https://hub.docker.com/r/irinesistiana/mosdns)
 
 ### domain_set
 
-- 支持自动重载 auto_reload
+- 支持自动重载 auto_reload(hosts强制启用无需配置auto_reload)
 
 ```yaml
 plugins:
   - tag: domain_set
     type: domain_set
+    args:
+      auto_reload: true
+      files:
+        - /path/to/domain_set.txt
+  - tag: ip_set
+    type: ip_set
     args:
       auto_reload: true
       files:
