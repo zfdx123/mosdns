@@ -43,8 +43,9 @@ func init() {
 }
 
 type Args struct {
-	Entries []string `yaml:"entries"`
-	Files   []string `yaml:"files"`
+	Entries    []string `yaml:"entries"`
+	Files      []string `yaml:"files"`
+	AutoReload bool     `yaml:"auto_reload"`
 }
 
 type Hosts struct {
@@ -69,7 +70,7 @@ func NewHosts(args *Args) (*Hosts, error) {
 	h.current.Store(hostsInst)
 
 	// 启动热重载
-	if len(args.Files) > 0 {
+	if args.AutoReload && len(args.Files) > 0 {
 		go h.watchFiles()
 	}
 
@@ -115,17 +116,24 @@ func (h *Hosts) watchFiles() {
 	for {
 		select {
 		case ev := <-w.Events:
-			if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) != 0 {
-				// 简单防抖
-				if time.Since(lastReload) < 300*time.Millisecond {
-					continue
-				}
-				lastReload = time.Now()
-
-				if nh, err := loadHosts(h.args); err == nil {
-					h.current.Store(nh)
-				}
+			if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
+				continue
 			}
+
+			if time.Since(lastReload) < 500*time.Millisecond {
+				continue
+			}
+			lastReload = time.Now()
+
+			for i := 0; i < 3; i++ {
+				nh, err := loadHosts(h.args)
+				if err == nil && nh != nil && !nh.Empty() {
+					h.current.Store(nh)
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+
 		case <-w.Errors:
 			// ignore
 		}

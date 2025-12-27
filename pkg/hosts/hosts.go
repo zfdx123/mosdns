@@ -41,6 +41,13 @@ func NewHosts(m domain.Matcher[*IPs]) *Hosts {
 	}
 }
 
+func (h *Hosts) Empty() bool {
+	if m, ok := h.matcher.(interface{ Len() int }); ok {
+		return m.Len() == 0
+	}
+	return false
+}
+
 func (h *Hosts) Lookup(fqdn string) (ipv4, ipv6 []netip.Addr) {
 	ips, ok := h.matcher.Match(fqdn)
 	if !ok {
