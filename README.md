@@ -11,7 +11,7 @@ docker 镜像: [docker hub](https://hub.docker.com/r/irinesistiana/mosdns)
 
 ## 修改的插件
 
-### domain_set
+### auto_reload
 
 - 支持自动重载 auto_reload
 
