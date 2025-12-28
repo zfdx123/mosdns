@@ -127,11 +127,11 @@ func (d *IPSet) startWatcher() error {
 		}
 	}
 
-	go d.watchLoop()
+	go d.watchFiles()
 	return nil
 }
 
-func (d *IPSet) watchLoop() {
+func (d *IPSet) watchFiles() {
 	lastReload := time.Now()
 
 	for {

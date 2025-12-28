@@ -28,12 +28,14 @@ import (
 	"time"
 
 	"github.com/IrineSistiana/mosdns/v5/coremain"
+	"github.com/IrineSistiana/mosdns/v5/mlog"
 	pkgHosts "github.com/IrineSistiana/mosdns/v5/pkg/hosts"
 	"github.com/IrineSistiana/mosdns/v5/pkg/matcher/domain"
 	"github.com/IrineSistiana/mosdns/v5/pkg/query_context"
 	"github.com/IrineSistiana/mosdns/v5/plugin/executable/sequence"
 	"github.com/fsnotify/fsnotify"
 	"github.com/miekg/dns"
+	"go.uber.org/zap"
 )
 
 const PluginType = "hosts"
@@ -51,6 +53,7 @@ type Args struct {
 type Hosts struct {
 	current atomic.Value // *pkgHosts.Hosts
 	args    *Args
+	watcher *fsnotify.Watcher
 }
 
 var _ sequence.Executable = (*Hosts)(nil)
@@ -71,7 +74,9 @@ func NewHosts(args *Args) (*Hosts, error) {
 
 	// 启动热重载
 	if args.AutoReload && len(args.Files) > 0 {
-		go h.watchFiles()
+		if err := h.startWatcher(); err != nil {
+			return nil, err
+		}
 	}
 
 	return h, nil
@@ -100,23 +105,30 @@ func loadHosts(args *Args) (*pkgHosts.Hosts, error) {
 	return pkgHosts.NewHosts(m), nil
 }
 
-func (h *Hosts) watchFiles() {
+func (h *Hosts) startWatcher() error {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
-		return
+		return err
 	}
-	defer w.Close()
+	h.watcher = w
 
 	for _, f := range h.args.Files {
-		_ = w.Add(f)
+		if err := w.Add(f); err != nil {
+			return err
+		}
 	}
 
+	go h.watchFiles()
+	return nil
+}
+
+func (h *Hosts) watchFiles() {
 	var lastReload time.Time
 
 	for {
 		select {
-		case ev := <-w.Events:
-			if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
+		case ev := <-h.watcher.Events:
+			if ev.Op&(fsnotify.Write|fsnotify.Create) == 0 {
 				continue
 			}
 
@@ -125,19 +137,27 @@ func (h *Hosts) watchFiles() {
 			}
 			lastReload = time.Now()
 
-			for i := 0; i < 3; i++ {
+			go func() {
 				nh, err := loadHosts(h.args)
 				if err == nil && nh != nil && !nh.Empty() {
 					h.current.Store(nh)
-					break
 				}
-				time.Sleep(50 * time.Millisecond)
-			}
+			}()
 
-		case <-w.Errors:
-			// ignore
+		case err, ok := <-h.watcher.Errors:
+			if !ok {
+				return
+			}
+			mlog.L().Info("[hosts] watcher error", zap.Error(err))
 		}
 	}
+}
+
+func (d *Hosts) Close() error {
+	if d.watcher != nil {
+		return d.watcher.Close()
+	}
+	return nil
 }
 
 func (h *Hosts) get() *pkgHosts.Hosts {
