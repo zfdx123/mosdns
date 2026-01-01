@@ -124,7 +124,9 @@ func checkBatch(client *http.Client, uri string, apiKey string, isCloud bool, io
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != 200 {
 		return result, nil
@@ -134,8 +136,6 @@ func checkBatch(client *http.Client, uri string, apiKey string, isCloud bool, io
 	if err != nil {
 		return nil, err
 	}
-
-	fmt.Println(string(raw))
 
 	if isCloud {
 		// ===== ② 回退解析 Cloud 版本 =====
@@ -147,10 +147,7 @@ func checkBatch(client *http.Client, uri string, apiKey string, isCloud bool, io
 			for ioc, intel := range cloud.Data.Domains {
 				result[ioc] = intel.IsMalicious
 			}
-			fmt.Println(result)
 			return result, nil
-		} else {
-			fmt.Println(err.Error())
 		}
 	} else {
 		// ===== ① 尝试解析 TIP 版本 =====
