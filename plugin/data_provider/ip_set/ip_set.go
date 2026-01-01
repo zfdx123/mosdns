@@ -28,10 +28,9 @@ import (
 	"time"
 
 	"github.com/IrineSistiana/mosdns/v5/coremain"
-	"github.com/IrineSistiana/mosdns/v5/mlog"
 	"github.com/IrineSistiana/mosdns/v5/pkg/matcher/netlist"
+	"github.com/IrineSistiana/mosdns/v5/plugin/common"
 	"github.com/IrineSistiana/mosdns/v5/plugin/data_provider"
-	"github.com/fsnotify/fsnotify"
 	"go.uber.org/zap"
 )
 
@@ -55,12 +54,15 @@ type Args struct {
 var _ data_provider.IPMatcherProvider = (*IPSet)(nil)
 
 type IPSet struct {
-	bp      *coremain.BP
-	args    *Args
-	dynamic *DynamicMatcherGroup
+	bp *coremain.BP
 
-	watcher *fsnotify.Watcher
-	files   []string
+	logger *zap.Logger
+
+	args     *Args
+	dynamic  *DynamicMatcherGroup
+	reloader *common.ReloadableFileSet
+
+	files []string
 }
 
 func (d *IPSet) GetIPMatcher() netlist.Matcher {
@@ -72,7 +74,7 @@ func NewIPSet(bp *coremain.BP, args *Args) (*IPSet, error) {
 		bp:      bp,
 		args:    args,
 		dynamic: NewDynamicMatcherGroup(),
-		files:   args.Files,
+		logger:  bp.L(),
 	}
 
 	if err := d.rebuildMatcher(); err != nil {
@@ -80,9 +82,16 @@ func NewIPSet(bp *coremain.BP, args *Args) (*IPSet, error) {
 	}
 
 	if args.AutoReload && len(args.Files) > 0 {
-		if err := d.startWatcher(); err != nil {
+		r, err := common.NewReloadableFileSet(
+			args.Files,
+			500*time.Millisecond,
+			d.logger,
+			d.rebuildMatcher,
+		)
+		if err != nil {
 			return nil, err
 		}
+		d.reloader = r
 	}
 
 	return d, nil
@@ -99,6 +108,16 @@ func (d *IPSet) rebuildMatcher() error {
 	l.Sort()
 	if l.Len() > 0 {
 		matchers = append(matchers, l)
+
+	}
+
+	if l.Len() > 0 {
+		matchers = append(matchers, l)
+		d.logger.Info(
+			"[IP] loaded",
+			zap.Int("ip", l.Len()),
+			zap.Int("files", len(d.args.Files)),
+		)
 	}
 
 	// 引用其他 ip_set
@@ -111,64 +130,17 @@ func (d *IPSet) rebuildMatcher() error {
 	}
 
 	d.dynamic.Update(MatcherGroup(matchers))
+
+	d.logger.Info(
+		"[IP] rebuild finished",
+		zap.Int("matchers", len(matchers)),
+	)
 	return nil
-}
-
-func (d *IPSet) startWatcher() error {
-	w, err := fsnotify.NewWatcher()
-	if err != nil {
-		return err
-	}
-	d.watcher = w
-
-	for _, f := range d.files {
-		if err := w.Add(f); err != nil {
-			return err
-		}
-	}
-
-	go d.watchFiles()
-	return nil
-}
-
-func (d *IPSet) watchFiles() {
-	lastReload := time.Now()
-
-	for {
-		select {
-		case ev, ok := <-d.watcher.Events:
-			if !ok {
-				return
-			}
-			if ev.Op&(fsnotify.Write|fsnotify.Create) == 0 {
-				continue
-			}
-
-			if time.Since(lastReload) < 500*time.Millisecond {
-				continue
-			}
-			lastReload = time.Now()
-
-			go func() {
-				if err := d.rebuildMatcher(); err != nil {
-					mlog.L().Info("[ip_set] reload failed: ", zap.Error(err))
-				} else {
-					mlog.L().Info("[ip_set] reload success")
-				}
-			}()
-
-		case err, ok := <-d.watcher.Errors:
-			if !ok {
-				return
-			}
-			mlog.L().Info("[ip_set] watcher error", zap.Error(err))
-		}
-	}
 }
 
 func (d *IPSet) Close() error {
-	if d.watcher != nil {
-		return d.watcher.Close()
+	if d.reloader != nil {
+		return d.reloader.Close()
 	}
 	return nil
 }

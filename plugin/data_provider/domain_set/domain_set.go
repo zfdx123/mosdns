@@ -23,14 +23,12 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/IrineSistiana/mosdns/v5/coremain"
-	"github.com/IrineSistiana/mosdns/v5/mlog"
 	"github.com/IrineSistiana/mosdns/v5/pkg/matcher/domain"
+	"github.com/IrineSistiana/mosdns/v5/plugin/common"
 	"github.com/IrineSistiana/mosdns/v5/plugin/data_provider"
-	"github.com/fsnotify/fsnotify"
 	"go.uber.org/zap"
 )
 
@@ -55,12 +53,14 @@ var _ data_provider.DomainMatcherProvider = (*DomainSet)(nil)
 
 type DomainSet struct {
 	dynamicGroup *DynamicMatcherGroup
+	reloader     *common.ReloadableFileSet
 
-	watcher *fsnotify.Watcher
-	files   []string
+	files []string
 
 	bp   *coremain.BP
 	args *Args
+
+	logger *zap.Logger
 }
 
 func (d *DomainSet) GetDomainMatcher() domain.Matcher[struct{}] {
@@ -70,7 +70,7 @@ func (d *DomainSet) GetDomainMatcher() domain.Matcher[struct{}] {
 // ---------------- matcher rebuild ----------------
 
 func (d *DomainSet) rebuildMatcher() error {
-	mlog.L().Info("[domain_set] rebuilding domain matcher")
+	d.logger.Info("[DOMAIN] rebuilding domain matcher")
 
 	var matchers []domain.Matcher[struct{}]
 
@@ -82,8 +82,8 @@ func (d *DomainSet) rebuildMatcher() error {
 		}
 		if m.Len() > 0 {
 			matchers = append(matchers, m)
-			mlog.L().Info(
-				"[domain_set] domains loaded",
+			d.logger.Info(
+				"[DOMAIN] loaded",
 				zap.Int("domains", m.Len()),
 				zap.Int("files", len(d.args.Files)),
 				zap.Int("exps", len(d.args.Exps)),
@@ -102,8 +102,8 @@ func (d *DomainSet) rebuildMatcher() error {
 
 	d.dynamicGroup.Update(MatcherGroup(matchers))
 
-	mlog.L().Info(
-		"[domain_set] rebuild finished",
+	d.logger.Info(
+		"[DOMAIN] rebuild finished",
 		zap.Int("matchers", len(matchers)),
 	)
 
@@ -117,6 +117,7 @@ func NewDomainSet(bp *coremain.BP, args *Args) (*DomainSet, error) {
 		bp:           bp,
 		args:         args,
 		dynamicGroup: NewDynamicMatcherGroup(),
+		logger:       bp.L(),
 	}
 
 	if err := ds.rebuildMatcher(); err != nil {
@@ -124,12 +125,26 @@ func NewDomainSet(bp *coremain.BP, args *Args) (*DomainSet, error) {
 	}
 
 	if args.AutoReload && len(args.Files) > 0 {
-		if err := ds.startFileWatcher(); err != nil {
+		r, err := common.NewReloadableFileSet(
+			args.Files,
+			500*time.Millisecond,
+			ds.logger,
+			ds.rebuildMatcher,
+		)
+		if err != nil {
 			return nil, err
 		}
+		ds.reloader = r
 	}
 
 	return ds, nil
+}
+
+func (d *DomainSet) Close() error {
+	if d.reloader != nil {
+		return d.reloader.Close()
+	}
+	return nil
 }
 
 // ---------------- loading helpers ----------------
@@ -165,89 +180,4 @@ func LoadFile(f string, m *domain.MixMatcher[struct{}]) error {
 		return err
 	}
 	return domain.LoadFromTextReader(m, bytes.NewReader(b), nil)
-}
-
-// ---------------- file watcher ----------------
-
-func (d *DomainSet) startFileWatcher() error {
-	w, err := fsnotify.NewWatcher()
-	if err != nil {
-		return err
-	}
-	d.watcher = w
-
-	for _, f := range d.args.Files {
-		abs, err := filepath.Abs(f)
-		if err != nil {
-			return err
-		}
-		abs = filepath.Clean(abs)
-
-		if err := w.Add(abs); err != nil {
-			return err
-		}
-		d.files = append(d.files, abs)
-	}
-
-	mlog.L().Info(
-		"[domain_set] file watcher enabled",
-		zap.Strings("files", d.files),
-	)
-
-	go d.watchFiles()
-	return nil
-}
-
-func (d *DomainSet) watchFiles() {
-	var lastReload time.Time
-
-	for {
-		select {
-		case e, ok := <-d.watcher.Events:
-			if !ok {
-				return
-			}
-
-			path := filepath.Clean(e.Name)
-			if !d.isMonitored(path) {
-				continue
-			}
-
-			if e.Op&(fsnotify.Write|fsnotify.Create) == 0 {
-				continue
-			}
-
-			if time.Since(lastReload) < 300*time.Millisecond {
-				continue
-			}
-			lastReload = time.Now()
-
-			mlog.L().Info(
-				"[domain_set] file changed, reloading",
-				zap.String("file", path),
-			)
-
-			if err := d.rebuildMatcher(); err != nil {
-				mlog.L().Error("[domain_set] reload failed", zap.Error(err))
-			} else {
-				mlog.L().Info("[domain_set] reload success")
-			}
-		}
-	}
-}
-
-func (d *DomainSet) isMonitored(p string) bool {
-	for _, f := range d.files {
-		if f == p {
-			return true
-		}
-	}
-	return false
-}
-
-func (d *DomainSet) Close() error {
-	if d.watcher != nil {
-		return d.watcher.Close()
-	}
-	return nil
 }

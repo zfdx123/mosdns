@@ -28,12 +28,11 @@ import (
 	"time"
 
 	"github.com/IrineSistiana/mosdns/v5/coremain"
-	"github.com/IrineSistiana/mosdns/v5/mlog"
 	pkgHosts "github.com/IrineSistiana/mosdns/v5/pkg/hosts"
 	"github.com/IrineSistiana/mosdns/v5/pkg/matcher/domain"
 	"github.com/IrineSistiana/mosdns/v5/pkg/query_context"
+	"github.com/IrineSistiana/mosdns/v5/plugin/common"
 	"github.com/IrineSistiana/mosdns/v5/plugin/executable/sequence"
-	"github.com/fsnotify/fsnotify"
 	"github.com/miekg/dns"
 	"go.uber.org/zap"
 )
@@ -53,30 +52,40 @@ type Args struct {
 type Hosts struct {
 	current atomic.Value // *pkgHosts.Hosts
 	args    *Args
-	watcher *fsnotify.Watcher
+	bp      *coremain.BP
+
+	logger *zap.Logger
+
+	reloader *common.ReloadableFileSet
 }
 
 var _ sequence.Executable = (*Hosts)(nil)
 
-func Init(_ *coremain.BP, args any) (any, error) {
-	return NewHosts(args.(*Args))
-}
-
-func NewHosts(args *Args) (*Hosts, error) {
-	h := &Hosts{args: args}
+func Init(bp *coremain.BP, args any) (any, error) {
+	h := &Hosts{
+		bp:     bp,
+		args:   args.(*Args),
+		logger: bp.L(),
+	}
 
 	// 初始加载
-	hostsInst, err := loadHosts(args)
+	hostsInst, err := loadHosts(h.args)
 	if err != nil {
 		return nil, err
 	}
 	h.current.Store(hostsInst)
 
-	// 启动热重载
-	if args.AutoReload && len(args.Files) > 0 {
-		if err := h.startWatcher(); err != nil {
+	if h.args.AutoReload && len(h.args.Files) > 0 {
+		r, err := common.NewReloadableFileSet(
+			h.args.Files,
+			500*time.Millisecond,
+			h.logger,
+			h.reload,
+		)
+		if err != nil {
 			return nil, err
 		}
+		h.reloader = r
 	}
 
 	return h, nil
@@ -105,57 +114,20 @@ func loadHosts(args *Args) (*pkgHosts.Hosts, error) {
 	return pkgHosts.NewHosts(m), nil
 }
 
-func (h *Hosts) startWatcher() error {
-	w, err := fsnotify.NewWatcher()
+func (h *Hosts) reload() error {
+	nh, err := loadHosts(h.args)
 	if err != nil {
 		return err
 	}
-	h.watcher = w
 
-	for _, f := range h.args.Files {
-		if err := w.Add(f); err != nil {
-			return err
-		}
-	}
-
-	go h.watchFiles()
+	h.current.Store(nh)
+	h.logger.Info("hosts reloaded", zap.Int("records", nh.Len()))
 	return nil
 }
 
-func (h *Hosts) watchFiles() {
-	var lastReload time.Time
-
-	for {
-		select {
-		case ev := <-h.watcher.Events:
-			if ev.Op&(fsnotify.Write|fsnotify.Create) == 0 {
-				continue
-			}
-
-			if time.Since(lastReload) < 500*time.Millisecond {
-				continue
-			}
-			lastReload = time.Now()
-
-			go func() {
-				nh, err := loadHosts(h.args)
-				if err == nil && nh != nil && !nh.Empty() {
-					h.current.Store(nh)
-				}
-			}()
-
-		case err, ok := <-h.watcher.Errors:
-			if !ok {
-				return
-			}
-			mlog.L().Info("[hosts] watcher error", zap.Error(err))
-		}
-	}
-}
-
 func (d *Hosts) Close() error {
-	if d.watcher != nil {
-		return d.watcher.Close()
+	if d.reloader != nil {
+		return d.reloader.Close()
 	}
 	return nil
 }

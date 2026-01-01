@@ -41,6 +41,13 @@ func NewHosts(m domain.Matcher[*IPs]) *Hosts {
 	}
 }
 
+func (h *Hosts) Len() int {
+	if m, ok := h.matcher.(interface{ Len() int }); ok {
+		return m.Len()
+	}
+	return 0
+}
+
 func (h *Hosts) Empty() bool {
 	if m, ok := h.matcher.(interface{ Len() int }); ok {
 		return m.Len() == 0
