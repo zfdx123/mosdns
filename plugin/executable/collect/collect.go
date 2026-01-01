@@ -13,6 +13,7 @@ import (
 	"github.com/IrineSistiana/mosdns/v5/coremain"
 	"github.com/IrineSistiana/mosdns/v5/pkg/query_context"
 	"github.com/IrineSistiana/mosdns/v5/plugin/executable/sequence"
+	"go.uber.org/zap"
 )
 
 const PluginType = "collect"
@@ -44,19 +45,21 @@ type writeOp struct {
 // collect结构
 type collect struct {
 	filePath string
-	
+
+	logger *zap.Logger
+
 	// 锁机制
 	cacheMu sync.RWMutex // 保护内存缓存
 	fileMu  sync.Mutex   // 保护文件操作的原子性
-	
+
 	// 数据结构
 	cache map[string]bool // 内存缓存，启动时加载文件内容
-	
+
 	// 异步写入
-	writeQueue chan writeOp   // 统一的写入队列
+	writeQueue chan writeOp  // 统一的写入队列
 	stopChan   chan struct{} // 停止信号
 	wg         sync.WaitGroup
-	
+
 	// 引用计数
 	refCount int32
 }
@@ -71,7 +74,7 @@ type collectWrapper struct {
 func (cw *collectWrapper) Exec(ctx context.Context, qCtx *query_context.Context) error {
 	question := qCtx.QQuestion()
 	domain := strings.TrimSuffix(question.Name, ".")
-	
+
 	if domain == "" {
 		return nil
 	}
@@ -106,11 +109,11 @@ func (c *collect) addEntry(entry string) error {
 		c.cacheMu.Unlock()
 		return nil // 已存在，无需重复添加
 	}
-	
+
 	// 添加到内存缓存
 	c.cache[entry] = true
 	c.cacheMu.Unlock()
-	
+
 	// 异步追加到文件，带重试机制
 	go func() {
 		for retries := 0; retries < 3; retries++ {
@@ -124,16 +127,16 @@ func (c *collect) addEntry(entry string) error {
 					continue
 				}
 				// 最后一次重试失败，保留错误日志
-				log.Printf("[COLLECT] ERROR: failed to queue add operation after 3 retries for %s", entry)
+				c.logger.Error("[COLLECT] ERROR: failed to queue add operation after 3 retries for ", zap.Any("entry", entry))
 			}
 		}
 	}()
-	
+
 	// log.Printf("[COLLECT] ADD %s to %s", entry, c.filePath)
 	return nil
 }
 
-// 删除条目 
+// 删除条目
 func (c *collect) deleteEntry(entry string) error {
 	c.cacheMu.Lock()
 	// 检查条目是否存在
@@ -141,11 +144,11 @@ func (c *collect) deleteEntry(entry string) error {
 		c.cacheMu.Unlock()
 		return nil // 不存在，无需删除
 	}
-	
+
 	// 从内存缓存中删除
 	delete(c.cache, entry)
 	c.cacheMu.Unlock()
-	
+
 	// 异步触发文件重写，带重试机制
 	go func() {
 		for retries := 0; retries < 5; retries++ { // delete操作更重要，多重试几次
@@ -163,7 +166,7 @@ func (c *collect) deleteEntry(entry string) error {
 			}
 		}
 	}()
-	
+
 	// log.Printf("[COLLECT] DEL %s for %s", entry, c.filePath)
 	return nil
 }
@@ -173,7 +176,7 @@ func (c *collect) writeProcessor() {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-		
+
 		for {
 			select {
 			case op := <-c.writeQueue:
@@ -211,14 +214,14 @@ func (c *collect) appendToFile(entry string) {
 	file, err := os.OpenFile(c.filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		// 保留错误日志
-		log.Printf("[COLLECT] ERROR: failed to open file for append: %v", err)
+		c.logger.Error("[COLLECT] ERROR: failed to open file for append: ", zap.Error(err))
 		return
 	}
 	defer file.Close()
-	
+
 	if _, err := file.WriteString(entry + "\n"); err != nil {
 		// 保留错误日志
-		log.Printf("[COLLECT] ERROR: failed to append entry: %v", err)
+		c.logger.Error("[COLLECT] ERROR: failed to append entry", zap.Error(err))
 	}
 }
 
@@ -231,14 +234,14 @@ func (c *collect) startBackgroundProcessor() {
 func getOrCreateInstance(filePath string) (*collect, error) {
 	instancesMu.Lock()
 	defer instancesMu.Unlock()
-	
+
 	instance, exists := instances[filePath]
 	if exists {
 		// 增加引用计数
 		instance.refCount++
 		return instance, nil
 	}
-	
+
 	// 创建新实例
 	instance = &collect{
 		filePath:   filePath,
@@ -246,19 +249,19 @@ func getOrCreateInstance(filePath string) (*collect, error) {
 		stopChan:   make(chan struct{}),
 		refCount:   1,
 	}
-	
+
 	// 初始化内存缓存并加载文件内容
 	instance.cache = make(map[string]bool)
 	if err := instance.loadFileToCache(); err != nil {
 		return nil, fmt.Errorf("failed to load file to cache: %w", err)
 	}
-	
+
 	// 启动后台写入处理
 	instance.startBackgroundProcessor()
-	
+
 	// 注册到全局管理器
 	instances[filePath] = instance
-	
+
 	return instance, nil
 }
 
@@ -266,7 +269,7 @@ func getOrCreateInstance(filePath string) (*collect, error) {
 func (cw *collectWrapper) Close() error {
 	instancesMu.Lock()
 	defer instancesMu.Unlock()
-	
+
 	cw.instance.refCount--
 	if cw.instance.refCount <= 0 {
 		// 最后一个引用，关闭实例
@@ -294,28 +297,28 @@ func (c *collect) rewriteEntireFile() {
 		entries = append(entries, entry)
 	}
 	c.cacheMu.RUnlock()
-	
+
 	// 使用临时文件+原子性重命名，确保触发fsnotify事件
 	tempFilePath := c.filePath + ".tmp"
 	tempFile, err := os.OpenFile(tempFilePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		// 保留错误日志
-		log.Printf("[COLLECT] ERROR: failed to create temp file: %v", err)
+		c.logger.Error("[COLLECT] ERROR: failed to create temp file", zap.Error(err))
 		return
 	}
-	
+
 	// 写入所有条目到临时文件
 	for _, entry := range entries {
 		if _, err := tempFile.WriteString(entry + "\n"); err != nil {
 			tempFile.Close()
 			os.Remove(tempFilePath)
 			// 保留错误日志
-			log.Printf("[COLLECT] ERROR: failed to write entry to temp file: %v", err)
+			c.logger.Error("[COLLECT] ERROR: failed to write entry to temp file", zap.Error(err))
 			return
 		}
 	}
 	tempFile.Close()
-	
+
 	// 原子性重命名，这会触发fsnotify的WRITE事件
 	if err := os.Rename(tempFilePath, c.filePath); err != nil {
 		os.Remove(tempFilePath)
@@ -323,7 +326,7 @@ func (c *collect) rewriteEntireFile() {
 		log.Printf("[COLLECT] ERROR: failed to rename temp file: %v", err)
 		return
 	}
-	
+
 	// log.Printf("[COLLECT] REWRITE_FILE completed, %d entries written", len(entries))
 }
 
@@ -352,7 +355,7 @@ func (c *collect) loadFileToCache() error {
 	return scanner.Err()
 }
 
-func Init(_ *coremain.BP, args any) (any, error) {
+func Init(bp *coremain.BP, args any) (any, error) {
 	a := args.(*Args)
 	if a.FilePath == "" {
 		return nil, fmt.Errorf("file_path is required")
@@ -374,6 +377,8 @@ func Init(_ *coremain.BP, args any) (any, error) {
 		return nil, err
 	}
 
+	instance.logger = bp.L()
+
 	// 返回包装器
 	return &collectWrapper{
 		instance:  instance,
@@ -381,4 +386,3 @@ func Init(_ *coremain.BP, args any) (any, error) {
 		operation: operation,
 	}, nil
 }
-

@@ -39,6 +39,75 @@ plugins:
 
 ## 新增插件
 
+### NGTIP
+联动微步NGTIP或云API实现恶意域名或域名返回恶意IP封禁
+
+#### 推荐 API
+```api
+# cloud
+https://api.threatbook.cn/v3/scene/dns # 支持IP和域名
+
+#情报网关
+http://ip:8090/tip_api/v5/dns 似乎查不到ip所以我们单独使用IP接口查询
+http://ip:8090/tip_api/v5/ip ip单独查询
+```
+
+```yaml
+plugins:
+  - tag: "intel_block_domain"
+    type: intel_block_domain
+    args:
+      # api: http://ip:8090/tip_api/v5/dns
+      api: https://api.threatbook.cn/v3/scene/dns
+      key: # APIKEY
+      is_cloud: true
+      timeout: 5000 # http 超时 5000ms
+      cache_ttl: 86400 # 缓存过期 
+      whitelist_file: "./user/while.yaml" # 白名单 跳过检查
+      reload_interval: 5 # 修改文件后多久重新加载文件进行防抖
+
+  - tag: "intel_block_ip"
+    type: intel_block_ip
+    args:
+      # api: http://ip:8090/tip_api/v5/ip
+      api: https://api.threatbook.cn/v3/scene/dns
+      key: # APIKEY
+      is_cloud: true
+      timeout: 5000
+      cache_ttl: 86400
+      whitelist_file: "./user/while.yaml"
+      reload_interval: 5
+      
+  - tag: main_entry
+    type: sequence
+    args:
+      - exec: prefer_ipv4
+
+      # 屏蔽恶意域名
+      - matches:
+          - qname $blacklist
+          - qname $geosite_category-ads-all
+        exec: reject 3
+
+      # 静态解析
+      - exec: $hosts
+      - exec: jump has_resp_sequence
+
+      # 域名级情报，查询阶段
+      - exec: $intel_block_domain
+      - exec: jump has_resp_sequence
+
+      # DNS 缓存
+      - exec: $dns_cacher
+      - exec: jump has_resp_sequence
+        
+      ## 你的原来的逻辑
+
+      - exec: $intel_block_ip
+      - exec: jump has_resp_sequence
+
+```
+
 ### collect
 
 域名收集插件，用于收集和管理DNS查询中的域名，支持添加和删除操作，具有高性能缓存机制。
