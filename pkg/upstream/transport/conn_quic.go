@@ -24,10 +24,10 @@ const (
 var _ DnsConn = (*QuicDnsConn)(nil)
 
 type QuicDnsConn struct {
-	c quic.Connection
+	c *quic.Conn
 }
 
-func NewQuicDnsConn(c quic.Connection) *QuicDnsConn {
+func NewQuicDnsConn(c *quic.Conn) *QuicDnsConn {
 	return &QuicDnsConn{c: c}
 }
 
@@ -51,7 +51,7 @@ func (c *QuicDnsConn) ReserveNewQuery() (_ ReservedExchanger, closed bool) {
 }
 
 type quicReservedExchanger struct {
-	stream quic.Stream
+	stream *quic.Stream
 }
 
 var _ ReservedExchanger = (*quicReservedExchanger)(nil)
@@ -109,7 +109,7 @@ func (ote *quicReservedExchanger) ExchangeReserved(ctx context.Context, q []byte
 		resp := r.resp
 		err := r.err
 		if resp != nil {
-			binary.BigEndian.PutUint16((*resp), orgQid)
+			binary.BigEndian.PutUint16(*resp, orgQid)
 		}
 		stream.CancelRead(_DOQ_NO_ERROR)
 		return resp, err
