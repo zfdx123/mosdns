@@ -153,7 +153,8 @@ func (b *IntelBlockIP) Exec(_ context.Context, qCtx *query_context.Context) erro
 		ips,
 	)
 	if err != nil {
-		return err
+		b.logger.Error("[NGTIP]服务器错误:", zap.Error(err))
+		return nil
 	}
 	for ip, mal := range res {
 		b.cache.Set(ip, mal)

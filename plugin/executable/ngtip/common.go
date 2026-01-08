@@ -3,7 +3,6 @@ package ngtip
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -108,7 +107,6 @@ func checkBatch(client *http.Client, uri string, apiKey string, isCloud bool, io
 		}
 
 		buf, err := json.Marshal(body)
-		fmt.Println(string(buf))
 		if err != nil {
 			return nil, err
 		}
