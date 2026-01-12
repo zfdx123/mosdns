@@ -47,6 +47,7 @@ func NewReloadableFileSet(
 		}
 		abs = filepath.Clean(abs)
 		if err := w.Add(abs); err != nil {
+			w.Close()
 			return nil, err
 		}
 		r.files = append(r.files, abs)
@@ -88,8 +89,13 @@ func (r *ReloadableFileSet) watch() {
 				}
 			}()
 
-		case err := <-r.watcher.Errors:
-			r.logger.Warn("watcher error", zap.Error(err))
+		case err, ok := <-r.watcher.Errors:
+			if !ok {
+				return
+			}
+			if err != nil {
+				r.logger.Warn("watcher error", zap.Error(err))
+			}
 		}
 	}
 }
