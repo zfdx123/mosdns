@@ -21,18 +21,21 @@ plugins:
     type: domain_set
     args:
       auto_reload: true
+      debounce_time: 5 # 防抖时间，防止一次性写入太多数据导致未写入完成读取
       files:
         - /path/to/domain_set.txt
   - tag: ip_set
     type: ip_set
     args:
       auto_reload: true
+      debounce_time: 5 # 防抖时间，防止一次性写入太多数据导致未写入完成读取
       files:
         - /path/to/ip_set.txt
   - tag: hosts
     type: hosts
     args:
       auto_reload: true
+      debounce_time: 5 # 防抖时间，防止一次性写入太多数据导致未写入完成读取
       files:
         - /path/to/hosts.txt
 ```
