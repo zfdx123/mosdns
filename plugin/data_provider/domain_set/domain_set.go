@@ -43,10 +43,11 @@ func Init(bp *coremain.BP, args any) (any, error) {
 }
 
 type Args struct {
-	Exps       []string `yaml:"exps"`
-	Sets       []string `yaml:"sets"`
-	Files      []string `yaml:"files"`
-	AutoReload bool     `yaml:"auto_reload"`
+	Exps         []string `yaml:"exps"`
+	Sets         []string `yaml:"sets"`
+	Files        []string `yaml:"files"`
+	AutoReload   bool     `yaml:"auto_reload"`
+	DebounceTime uint     `yaml:"debounce_time"`
 }
 
 var _ data_provider.DomainMatcherProvider = (*DomainSet)(nil)
@@ -127,7 +128,7 @@ func NewDomainSet(bp *coremain.BP, args *Args) (*DomainSet, error) {
 	if args.AutoReload && len(args.Files) > 0 {
 		r, err := common.NewReloadableFileSet(
 			args.Files,
-			500*time.Millisecond,
+			time.Duration(ds.args.DebounceTime)*time.Second,
 			ds.logger,
 			ds.rebuildMatcher,
 		)

@@ -44,9 +44,10 @@ func init() {
 }
 
 type Args struct {
-	Entries    []string `yaml:"entries"`
-	Files      []string `yaml:"files"`
-	AutoReload bool     `yaml:"auto_reload"`
+	Entries      []string `yaml:"entries"`
+	Files        []string `yaml:"files"`
+	AutoReload   bool     `yaml:"auto_reload"`
+	DebounceTime uint     `yaml:"debounce_time"`
 }
 
 type Hosts struct {
@@ -78,7 +79,7 @@ func Init(bp *coremain.BP, args any) (any, error) {
 	if h.args.AutoReload && len(h.args.Files) > 0 {
 		r, err := common.NewReloadableFileSet(
 			h.args.Files,
-			500*time.Millisecond,
+			time.Duration(h.args.DebounceTime)*time.Second,
 			h.logger,
 			h.reload,
 		)

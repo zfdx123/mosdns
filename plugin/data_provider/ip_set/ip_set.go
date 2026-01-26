@@ -45,10 +45,11 @@ func Init(bp *coremain.BP, args any) (any, error) {
 }
 
 type Args struct {
-	IPs        []string `yaml:"ips"`
-	Sets       []string `yaml:"sets"`
-	Files      []string `yaml:"files"`
-	AutoReload bool     `yaml:"auto_reload"`
+	IPs          []string `yaml:"ips"`
+	Sets         []string `yaml:"sets"`
+	Files        []string `yaml:"files"`
+	AutoReload   bool     `yaml:"auto_reload"`
+	DebounceTime uint     `yaml:"debounce_time"`
 }
 
 var _ data_provider.IPMatcherProvider = (*IPSet)(nil)
@@ -84,7 +85,7 @@ func NewIPSet(bp *coremain.BP, args *Args) (*IPSet, error) {
 	if args.AutoReload && len(args.Files) > 0 {
 		r, err := common.NewReloadableFileSet(
 			args.Files,
-			500*time.Millisecond,
+			time.Duration(d.args.DebounceTime)*time.Second,
 			d.logger,
 			d.rebuildMatcher,
 		)
