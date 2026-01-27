@@ -58,13 +58,18 @@ func NewReloadableFileSet(
 }
 
 func (r *ReloadableFileSet) watch() {
+	timers := make(map[string]*time.Timer)
+	mu := sync.Mutex{}
+
 	for {
 		select {
 		case ev, ok := <-r.watcher.Events:
 			if !ok {
 				return
 			}
-			if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
+
+			// 非原子写入：只关心 Write / Create
+			if ev.Op&(fsnotify.Write|fsnotify.Create) == 0 {
 				continue
 			}
 
@@ -73,21 +78,21 @@ func (r *ReloadableFileSet) watch() {
 				continue
 			}
 
-			r.mu.Lock()
-			if time.Since(r.lastReload) < r.debounce {
-				r.mu.Unlock()
-				continue
+			mu.Lock()
+			if t, ok := timers[path]; ok {
+				// 写还在继续，重置计时器
+				t.Stop()
 			}
-			r.lastReload = time.Now()
-			r.mu.Unlock()
 
-			go func() {
+			timers[path] = time.AfterFunc(r.debounce, func() {
+				// debounce 时间内没有新写入 → 认为稳定
 				if err := r.reload(); err != nil {
 					r.logger.Error("reload failed", zap.Error(err))
 				} else {
 					r.logger.Info("reload success")
 				}
-			}()
+			})
+			mu.Unlock()
 
 		case err, ok := <-r.watcher.Errors:
 			if !ok {
