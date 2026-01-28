@@ -65,6 +65,7 @@ import (
 	_ "github.com/IrineSistiana/mosdns/v5/plugin/executable/ttl"
 
 	_ "github.com/IrineSistiana/mosdns/v5/plugin/executable/ngtip"
+	_ "github.com/IrineSistiana/mosdns/v5/plugin/executable/runtime_stats"
 
 	// executable and matcher
 	_ "github.com/IrineSistiana/mosdns/v5/plugin/mark"

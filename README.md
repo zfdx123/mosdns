@@ -42,6 +42,22 @@ plugins:
 
 ## 新增插件
 
+### 运行期 DNS 统计 (runtime_stats)
+
+```yaml
+plugins:
+  - tag: stats
+    type: runtime_stats
+    args:
+      max_domains: 50000
+
+  - tag: main_entry
+    type: sequence
+    args:
+      - exec: $stats
+
+```
+
 ### NGTIP
 联动微步NGTIP或云API实现恶意域名或域名返回恶意IP封禁
 
