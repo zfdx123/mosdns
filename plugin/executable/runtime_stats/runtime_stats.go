@@ -3,7 +3,6 @@ package runtime_stats
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -85,22 +84,23 @@ func (r *runtimeStats) Api() *chi.Mux {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 	})
 
 	// GET /plugins/<tag>/show
 	rtr.Get("/show", func(w http.ResponseWriter, _ *http.Request) {
 		r.mu.Lock()
-		stats := make([]struct {
-			Domain string
-			Count  int64
-		}, 0, len(r.domainStats))
 
+		type Item struct {
+			Domain string `json:"domain"`
+			Count  int64  `json:"count"`
+		}
+
+		stats := make([]Item, 0, len(r.domainStats))
 		for d, c := range r.domainStats {
-			stats = append(stats, struct {
-				Domain string
-				Count  int64
-			}{d, c})
+			stats = append(stats, Item{Domain: d, Count: c})
 		}
 		r.mu.Unlock()
 
@@ -108,10 +108,9 @@ func (r *runtimeStats) Api() *chi.Mux {
 			return stats[i].Count > stats[j].Count
 		})
 
-		for _, s := range stats {
-			w.Write([]byte(
-				fmt.Sprintf("%10d %s\n", s.Count, s.Domain),
-			))
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(stats); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 	})
 
@@ -124,7 +123,14 @@ func (r *runtimeStats) Api() *chi.Mux {
 		r.startTime = time.Now()
 		r.mu.Unlock()
 
-		w.Write([]byte("runtime_stats reset\n"))
+		resp := map[string]any{
+			"msg": "success",
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 	})
 
 	return rtr
